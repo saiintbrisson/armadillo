@@ -5,9 +5,9 @@
 
 use crate::io::{recv_json, send_json};
 use crate::protocol::{ClientMessage, RelayMessage};
-use crate::share_code::{CandidateType, ConnectionCandidate, decode_share_code, encode_share_code};
+use crate::share_code::{CandidateType, ConnectionCandidate, ShareCodeData, encode_share_code};
 use crate::tls;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use dashmap::DashMap;
 use quinn::{Connection, Endpoint};
 use std::net::SocketAddr;
@@ -30,12 +30,9 @@ impl TunnelClient {
     }
 
     /// Establishes tunnel and generates modified share code
-    pub async fn setup_tunnel(&self, original_share_code: &str) -> Result<String> {
+    pub async fn setup_tunnel(&self, share_data: ShareCodeData, password: Option<String>) -> Result<String> {
         let relay_addr = self.relay_addr;
         info!("Setting up tunnel to relay at {relay_addr}");
-
-        let share_data =
-            decode_share_code(original_share_code).context("Failed to decode share code")?;
 
         let server_name = &share_data.server_name;
         let host_uuid = &share_data.host_uuid;
@@ -55,6 +52,7 @@ impl TunnelClient {
 
         let msg = ClientMessage::SetupTunnel {
             host_uuid: share_data.host_uuid.clone(),
+            password,
         };
         send_json(&mut send, &msg).await?;
 

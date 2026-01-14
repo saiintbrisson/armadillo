@@ -9,6 +9,7 @@ use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
+use std::net::SocketAddr;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CandidateType {
@@ -64,6 +65,37 @@ pub fn encode_share_code(data: &ShareCodeData) -> Result<String> {
     let compressed = encoder.finish().context("Failed to finish compression")?;
 
     Ok(STANDARD.encode(compressed))
+}
+
+/// Creates a new share code from a local server address
+pub fn create_share_code(local_addr: SocketAddr, expires_in: std::time::Duration) -> Result<ShareCodeData> {
+    let host_uuid = uuid::Uuid::new_v4().to_string();
+    let host_name = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let expires_at = {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?;
+        let expires = now + expires_in;
+        let datetime = time::OffsetDateTime::from_unix_timestamp(expires.as_secs() as i64)?;
+        datetime.format(&time::format_description::well_known::Iso8601::DEFAULT)?
+    };
+
+    Ok(ShareCodeData {
+        host_name,
+        host_uuid,
+        server_name: "Proxied Server".to_string(),
+        password: String::new(),
+        expires_at,
+        candidates: vec![ConnectionCandidate {
+            type_: CandidateType::Host,
+            address: local_addr.ip().to_string(),
+            port: local_addr.port(),
+            priority: 1000,
+        }],
+    })
 }
 
 #[cfg(test)]

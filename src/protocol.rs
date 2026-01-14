@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
-    SetupTunnel { host_uuid: String },
+    SetupTunnel {
+        host_uuid: String,
+        password: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

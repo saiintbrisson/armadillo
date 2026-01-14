@@ -33,6 +33,7 @@ pub struct RelayServer {
     start_port: u16,
     end_port: u16,
     max_players: usize,
+    password: Option<String>,
 }
 
 impl RelayServer {
@@ -41,12 +42,14 @@ impl RelayServer {
         start_port: u16,
         end_port: u16,
         max_players: usize,
+        password: Option<String>,
     ) -> Self {
         Self {
             control_addr,
             start_port,
             end_port,
             max_players,
+            password,
         }
     }
 
@@ -84,6 +87,7 @@ impl RelayServer {
             let port_cursor = Arc::clone(&port_cursor);
             let max_players = self.max_players;
             let port_range = (self.start_port, self.end_port);
+            let password = self.password.clone();
 
             tokio::spawn(async move {
                 if let Err(e) = handle_host_connection(
@@ -92,6 +96,7 @@ impl RelayServer {
                     port_cursor,
                     port_range,
                     max_players,
+                    password,
                 )
                 .await
                 {
@@ -130,15 +135,35 @@ async fn handle_host_connection(
     port_cursor: Arc<RwLock<u16>>,
     port_range: (u16, u16),
     max_players: usize,
+    expected_password: Option<String>,
 ) -> Result<()> {
     let connection = incoming.await?;
     let remote = connection.remote_address();
     info!("Host connected from {remote}");
 
     let (mut send, mut recv) = connection.accept_bi().await?;
-    let ClientMessage::SetupTunnel { host_uuid } = recv_json::<ClientMessage>(&mut recv).await?;
+    let ClientMessage::SetupTunnel { host_uuid, password } = recv_json::<ClientMessage>(&mut recv).await?;
 
     info!("Setup request for host {host_uuid}");
+
+    if let Some(expected) = &expected_password {
+        match password {
+            Some(ref provided) if provided == expected => {
+                info!("Password authenticated for {host_uuid}");
+            }
+            _ => {
+                warn!("Authentication failed for {host_uuid}");
+                send_json(
+                    &mut send,
+                    &RelayMessage::Error {
+                        message: "Authentication failed".to_string(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+        }
+    }
 
     if let Some(existing) = host_sessions.get(&host_uuid) {
         if existing.host_ip == remote.ip() {
