@@ -8,10 +8,16 @@ They said it wasn't real. They said it couldn't be done. Bypass Hytale's UPnP LA
 # On your VPS
 ./armadillo serve
 
-# On your machine (after starting Hytale server and copying share code)
-./armadillo tunnel --relay "your-vps-ip:65472" "paste_share_code_here"
-# Outputs new share code
+# On your machine (after starting Hytale world and copying share code)
+./armadillo tunnel --relay your.relay.com "<share code>"
+# Outputs new share code or relayed address
+
+# Or a server address if you have a dedicated one
+./armadillo tunnel --relay your.relay.com 127.0.0.1
+# Also generates a share code
 ```
+
+The `ARMADILLO_PASS=<pass>` environment variable can be set on both server and client to enable authentication. The generated share code works for both worlds and dedicated servers.
 
 ## How It Works
 
