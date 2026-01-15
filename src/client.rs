@@ -30,7 +30,11 @@ impl TunnelClient {
     }
 
     /// Establishes tunnel and generates modified share code
-    pub async fn setup_tunnel(&self, share_data: ShareCodeData, password: Option<String>) -> Result<String> {
+    pub async fn setup_tunnel(
+        &self,
+        share_data: ShareCodeData,
+        password: Option<String>,
+    ) -> Result<(SocketAddr, String)> {
         let relay_addr = self.relay_addr;
         info!("Setting up tunnel to relay at {relay_addr}");
 
@@ -58,7 +62,7 @@ impl TunnelClient {
 
         let response = recv_json::<RelayMessage>(&mut recv).await?;
 
-        let port = match response {
+        let allocated_port = match response {
             RelayMessage::TunnelReady { port } => {
                 info!("Tunnel established on port {port}");
                 port
@@ -68,12 +72,11 @@ impl TunnelClient {
             }
         };
 
-        let relay_ip = self.relay_addr.ip().to_string();
         let mut modified_share = share_data;
         modified_share.candidates = vec![ConnectionCandidate {
             type_: CandidateType::Relay,
-            address: relay_ip,
-            port,
+            address: relay_addr.ip().to_string(),
+            port: allocated_port,
             priority: 1000,
         }];
 
@@ -86,7 +89,10 @@ impl TunnelClient {
             }
         });
 
-        Ok(modified_code)
+        Ok((
+            SocketAddr::new(relay_addr.ip(), allocated_port),
+            modified_code,
+        ))
     }
 
     /// Blocks forever (tunnel runs in background)

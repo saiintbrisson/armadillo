@@ -5,7 +5,7 @@ mod relay;
 mod share_code;
 mod tls;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use client::TunnelClient;
 use relay::RelayServer;
@@ -30,6 +30,30 @@ fn parse_duration(s: &str) -> Result<Duration> {
         "d" => Ok(Duration::from_secs(num * 86400)),
         _ => Err(anyhow!("Invalid duration unit: {unit}. Use s, m, h, or d")),
     }
+}
+
+async fn parse_relay_address(relay: &str) -> Result<SocketAddr> {
+    let (host, port) = if relay.contains(':') {
+        let parts: Vec<&str> = relay.split(':').collect();
+        if parts.len() != 2 {
+            return Err(anyhow!("Invalid relay address format"));
+        }
+        let port = parts[1].parse::<u16>().context("Invalid port")?;
+        (parts[0].to_string(), port)
+    } else {
+        (relay.to_string(), 65472)
+    };
+
+    let addr_str = format!("{host}:{port}");
+    let mut addrs = tokio::net::lookup_host(&addr_str)
+        .await
+        .context("Failed to resolve relay address")?;
+
+    let addr = addrs
+        .next()
+        .context("No addresses found for relay hostname")?;
+
+    Ok(addr)
 }
 
 #[derive(Parser)]
@@ -94,8 +118,13 @@ async fn main() -> Result<()> {
         .init();
 
     match Cli::parse().command {
-        Commands::Tunnel { relay, share_code, expires, password } => {
-            let relay_addr = relay.parse().context("Invalid relay address")?;
+        Commands::Tunnel {
+            relay,
+            share_code,
+            expires,
+            password,
+        } => {
+            let relay_addr = parse_relay_address(&relay).await?;
 
             let (share_data, local_addr) = if let Ok(addr) = share_code.parse::<SocketAddr>() {
                 let expires_duration = parse_duration(&expires)?;
@@ -116,12 +145,14 @@ async fn main() -> Result<()> {
             };
 
             let client = TunnelClient::new(relay_addr, local_addr).await?;
-            let new_code = client.setup_tunnel(share_data, password).await?;
+            let (new_addr, new_code) = client.setup_tunnel(share_data, password).await?;
 
             println!();
             println!("Share the new code with your friends:");
             println!();
             println!("{new_code}");
+            println!();
+            println!("Or join with IP: {new_addr}");
             println!();
 
             client.run_tunnel().await?;

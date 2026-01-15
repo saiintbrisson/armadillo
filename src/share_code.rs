@@ -68,7 +68,10 @@ pub fn encode_share_code(data: &ShareCodeData) -> Result<String> {
 }
 
 /// Creates a new share code from a local server address
-pub fn create_share_code(local_addr: SocketAddr, expires_in: std::time::Duration) -> Result<ShareCodeData> {
+pub fn create_share_code(
+    local_addr: SocketAddr,
+    expires_in: std::time::Duration,
+) -> Result<ShareCodeData> {
     let host_uuid = uuid::Uuid::new_v4().to_string();
     let host_name = hostname::get()
         .ok()
@@ -76,8 +79,7 @@ pub fn create_share_code(local_addr: SocketAddr, expires_in: std::time::Duration
         .unwrap_or_else(|| "Unknown".to_string());
 
     let expires_at = {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?;
         let expires = now + expires_in;
         let datetime = time::OffsetDateTime::from_unix_timestamp(expires.as_secs() as i64)?;
         datetime.format(&time::format_description::well_known::Iso8601::DEFAULT)?
@@ -107,6 +109,7 @@ mod tests {
     #[test]
     fn test_decode() {
         let data = decode_share_code(EXAMPLE_CODE).unwrap();
+        dbg!(&data);
         assert_eq!(data.server_name, "New World");
         assert_eq!(data.password, "123");
         assert_eq!(data.candidates.len(), 1);

@@ -142,7 +142,10 @@ async fn handle_host_connection(
     info!("Host connected from {remote}");
 
     let (mut send, mut recv) = connection.accept_bi().await?;
-    let ClientMessage::SetupTunnel { host_uuid, password } = recv_json::<ClientMessage>(&mut recv).await?;
+    let ClientMessage::SetupTunnel {
+        host_uuid,
+        password,
+    } = recv_json::<ClientMessage>(&mut recv).await?;
 
     info!("Setup request for host {host_uuid}");
 
