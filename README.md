@@ -55,6 +55,8 @@ points, the server allows unauthenticated players to join:
 * A patch to `SessionServiceClient` allows us to avoid requests to Hytale's servers
 * Inserting a fake game session to `ServerAuthManager` avoid a set of other requests
 
+<video src="https://github.com/user-attachments/assets/5bb292a4-e21b-4e46-9295-5a20fc911d77" controls preload></video>
+
 ### Player -> Proxy
 
 The proxy validates JWT tokens using EdDSA (Ed25519) signatures. Public keys are fetched from the session service's JWKS endpoint and cached. This is the same process handled by the server JAR.
