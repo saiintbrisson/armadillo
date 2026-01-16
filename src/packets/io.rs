@@ -55,6 +55,13 @@ impl PacketReader {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RawPacket {
+    pub id: u32,
+    pub payload_len: u32,
+    pub bytes: Bytes,
+}
+
 pub struct RawPacketReader {
     buffer: BytesMut,
 }
@@ -70,19 +77,25 @@ impl RawPacketReader {
         &mut self.buffer
     }
 
-    pub fn try_read_packet(&mut self) -> Result<Option<Bytes>> {
+    pub fn try_read_packet(&mut self) -> Result<Option<RawPacket>> {
         if self.buffer.len() < FRAME_HEADER_SIZE {
             return Ok(None);
         }
 
-        let length = (&self.buffer[..4]).get_u32_le() as usize;
-        let total_len = FRAME_HEADER_SIZE + length;
+        let payload_len = (&self.buffer[..4]).get_u32_le();
+        let id = (&self.buffer[4..8]).get_u32_le();
+        let total_len = FRAME_HEADER_SIZE + payload_len as usize;
+
         if self.buffer.len() < total_len {
             return Ok(None);
         }
 
-        let packet_bytes = self.buffer.split_to(total_len).freeze();
-        Ok(Some(packet_bytes))
+        let bytes = self.buffer.split_to(total_len).freeze();
+        Ok(Some(RawPacket {
+            id,
+            payload_len,
+            bytes,
+        }))
     }
 }
 

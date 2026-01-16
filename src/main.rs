@@ -14,7 +14,7 @@ use std::time::Duration;
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::io::AsyncReadExt;
 use tokio::net::lookup_host;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use auth::CredentialStore;
 use handshake::HandshakeHandler;
@@ -380,6 +380,7 @@ async fn handle_proxy_connection(
     tokio::spawn(relay_stream(server_recv, client_send, "server->client"));
 }
 
+#[tracing::instrument(skip_all)]
 async fn relay_stream(mut recv: quinn::RecvStream, mut send: quinn::SendStream, direction: &str) {
     let mut reader = RawPacketReader::new();
 
@@ -391,8 +392,13 @@ async fn relay_stream(mut recv: quinn::RecvStream, mut send: quinn::SendStream, 
             }
             Ok(_) => loop {
                 match reader.try_read_packet() {
-                    Ok(Some(packet_bytes)) => {
-                        if let Err(e) = send.write_all(&packet_bytes).await {
+                    Ok(Some(packet)) => {
+                        debug!(
+                            "[{direction}] packet_id={} payload_len={}",
+                            packet.id, packet.payload_len
+                        );
+
+                        if let Err(e) = send.write_all(&packet.bytes).await {
                             error!("[{direction}] Write error: {e}");
                             return;
                         }
