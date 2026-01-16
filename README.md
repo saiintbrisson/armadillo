@@ -1,50 +1,133 @@
-# Hytale Relay - CGNAT/UPnP Bypass
+# Armadillo Proxy
 
-They said it wasn't real. They said it couldn't be done. Bypass Hytale's UPnP LAN to play with friends when the host is behind CGNAT or when the router does not support UPnP.
+Armadillo is a QUIC, TLS-terminating, proxy that sits between Hytale clients and servers, handling authentication on behalf of the server. Allowing full visibility into the contents.
+
+```mermaid
+flowchart LR
+    subgraph External
+        Sessions[(sessions.hytale.com)]
+    end
+
+    Player <-->|TLS<br>Full Hytale Auth| Proxy
+    Proxy <-->|TLS<br>Bypassed Auth| Server
+
+    Proxy --> Analysis[Decrypted<br>Traffic Analysis]
+
+    Player -.->|auth requests| Sessions
+    Proxy -.->|auth requests| Sessions
+```
 
 ## Quick Start
 
+Build and install the server plugin:
+
 ```bash
-# On your VPS
-./armadillo serve
-
-# On your machine (after starting Hytale world and copying share code)
-./armadillo tunnel --relay your.relay.com "<share code>"
-# Outputs new share code or relayed address
-
-# Or a server address if you have a dedicated one
-./armadillo tunnel --relay your.relay.com 127.0.0.1
-# Also generates a share code
+cd plugin
+./gradlew build
+cp build/libs/offline-mode-0.1.0.jar /path/to/server/mods/
 ```
 
-The `ARMADILLO_PASS=<pass>` environment variable can be set on both server and client to enable authentication. The generated share code works for both worlds and dedicated servers.
+Build the proxy:
 
-## How It Works
-
-Hytale share codes are Base64 encoded, flate compressed JSONs:
-
-```json
-{
-  "HostName": "computer-name",
-  "HostUuid": "<UUID-v4>",
-  "ServerName": "New World",
-  "Password": "123",
-  "ExpiresAt": "2026-01-15T13:45:16Z",
-  "Candidates": [
-    {"Type": "Host", "Address": "192.168.0.1", "Port": 65472, "Priority": 1000},
-    {"Type": "UPnP", "Address": "192.168.0.2", "Port": 65472, "Priority": 900}
-  ]
-}
+```bash
+cargo build --release
 ```
 
-The candidates list informs how the client can try connecting to the server. By connecting to a relay server, a new share code can be created with the relay as the sole candidate.
+Run the proxy (requires `auth.enc` from a Hytale client):
 
+```bash
+./target/release/armadillo --listen 0.0.0.0:5520 --upstream 127.0.0.1:5521
 ```
-You (CGNAT) <--- Multiplexed QUIC datagrams ---> VPS Relay (Public) <---> Friend
+
+Point your client to the proxy address. The server should listen on the upstream port with the plugin loaded.
+
+## Why?
+
+First, because it's fun. Second, it's a good starting point for those looking into how to extend the server.
+
+Hytale uses QUIC, which in turn uses TLS 1.3. This version of TLS comes with perfect forward secrecy out of the box, making it impossible to eavesdrop a communication
+between peers without actively participating. If you try simply terminating the TLS, the Hytale server will notice your certificate does not match the player's you
+are connecting on behalf.
+
+Luckily, we are in Java-land. A simple mod (plugin) is enough to patch the server in a way to bypass the certificate validation. By using reflection in 3 specific
+points, the server allows unauthenticated players to join:
+* By overriding the logic in `JWTValidator`, we can still parse relevant token information without validatin the player's certificate
+* A patch to `SessionServiceClient` allows us to avoid requests to Hytale's servers
+* Inserting a fake game session to `ServerAuthManager` avoid a set of other requests
+
+### Player -> Proxy
+
+The proxy validates JWT tokens using EdDSA (Ed25519) signatures. Public keys are fetched from the session service's JWKS endpoint and cached. This is the same process handled by the server JAR.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant P as Proxy
+    participant S as Session Service
+
+    C->>P: Connect packet (identity_token, uuid, username)
+    P->>P: Validate identity_token signature (EdDSA)
+    P->>S: POST /server-join/auth-grant
+    S-->>P: authorization_grant
+    P->>C: AuthGrant packet (authorization_grant, server_identity_token)
+    C->>P: AuthToken packet (access_token, server_authorization_grant)
+    P->>P: Validate access_token signature
+    P->>S: POST /server-join/auth-token (exchange server_authorization_grant)
+    S-->>P: server_access_token
+    P->>C: ServerAuthToken packet (server_access_token)
 ```
 
-This is called a [TURN]-style proxy. By initiating a transmission to a third party server, the CGNAT creates a mapping (using, for example, a 5-tuple) making it possible for traffic to flow between you and a relay, like making a web request. A dedicated port is allocated to your world and the relay client generates a new share code using the relay server address.
+### Proxy -> Server
 
-The QUIC datagrams between the host and the relay are prefixed by a 2-byte player ID. QUIC datagrams preserve boundaries, and streams and retransmissions are handled naturally by the underlying game QUIC protocol.
+The patched server ignores all validation and only extracts the necessary information from the client's token. After authentication is done, traffic can be relayed.
 
-[TURN]: https://en.wikipedia.org/wiki/Traversal_Using_Relays_around_NAT
+```mermaid
+sequenceDiagram
+    participant P as Proxy
+    participant U as Upstream Server
+
+    P->>U: Connect packet (original from client)
+    U->>P: AuthGrant packet
+    P->>U: AuthToken packet (client's access_token)
+    U->>P: ServerAuthToken packet
+    Note over P,U: Bidirectional relay begins
+```
+
+## Packet Structure
+
+All packets use a simple framing format:
+
+| Field | Size | Description |
+|-------|------|-------------|
+| length | 4 bytes (LE) | Payload length |
+| id | 4 bytes (LE) | Packet type ID |
+| payload | variable | Packet-specific data |
+
+## The auth.enc file
+
+Credentials are encrypted with AES-256-GCM. The key is derived from the machine's hardware UUID using PBKDF2-HMAC-SHA256 (100k iterations, salt: `HytaleAuthCredentialStore`).
+
+#### Encrypted file format
+
+| Offset | Size | Content |
+|--------|------|---------|
+| 0 | 12 | Nonce/IV |
+| 12 | rest | Ciphertext + GCM tag |
+
+#### Decrypted file format
+
+| Offset | Size | Content |
+|--------|------|---------|
+| 0 | 4 | Header (zeros) |
+| 4+ | var | Field entries (repeated) |
+
+Each entry:
+
+| Size | Content |
+|------|---------|
+| 1 | Separator (0x00) |
+| var | Key name (null-terminated) |
+| 4 | Value length (LE u32) |
+| var | Value bytes |
+
+And the fields: `AccessToken`, `RefreshToken`, `ExpiresAt`, `ProfileUuid`

@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  rust:
     strategy:
       matrix:
         include:
@@ -42,16 +42,39 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
-      - name: Rename binary ( Unix :) )
+      - name: Rename binaries (Unix)
         if: matrix.os != 'windows-latest'
-        run: mv target/${{ matrix.target }}/release/armadillo target/${{ matrix.target }}/release/armadillo-${{ matrix.target }}
+        run: |
+          mv target/${{ matrix.target }}/release/armadillo target/${{ matrix.target }}/release/armadillo-${{ matrix.target }}
+          mv target/${{ matrix.target }}/release/armadillo-relay target/${{ matrix.target }}/release/armadillo-relay-${{ matrix.target }}
 
-      - name: Rename binary ( Windows :( )
+      - name: Rename binaries (Windows)
         if: matrix.os == 'windows-latest'
-        run: Move-Item target/${{ matrix.target }}/release/armadillo.exe target/${{ matrix.target }}/release/armadillo-${{ matrix.target }}.exe
         shell: pwsh
+        run: |
+          Move-Item target/${{ matrix.target }}/release/armadillo.exe target/${{ matrix.target }}/release/armadillo-${{ matrix.target }}.exe
+          Move-Item target/${{ matrix.target }}/release/armadillo-relay.exe target/${{ matrix.target }}/release/armadillo-relay-${{ matrix.target }}.exe
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/${{ matrix.target }}/release/armadillo-${{ matrix.target }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          files: |
+            target/${{ matrix.target }}/release/armadillo-${{ matrix.target }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+            target/${{ matrix.target }}/release/armadillo-relay-${{ matrix.target }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew build
+        working-directory: plugin
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: plugin/build/libs/*.jar

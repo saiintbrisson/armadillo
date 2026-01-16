@@ -1,0 +1,16 @@
+{
+  "Group": "rs.luiz",
+  "Name": "OfflineMode",
+  "Version": "${version}",
+  "Authors": [
+    {
+      "Name": "Luiz",
+      "Email": "me@luiz.rs",
+      "Url": "https://luiz.rs"
+    }
+  ],
+  "Website": "https://luiz.rs",
+  "Main": "rs.luiz.hytale.offline_mode.OfflineModePlugin",
+  "ServerVersion": "*",
+  "Description": "Offline Mode"
+}

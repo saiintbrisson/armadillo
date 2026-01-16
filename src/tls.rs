@@ -19,69 +19,15 @@ pub fn generate_self_signed_cert() -> Result<(Vec<CertificateDer<'static>>, Priv
 }
 
 /// Creates server TLS config with self-signed cert
-pub fn configure_server() -> Result<Arc<rustls::ServerConfig>> {
+pub fn configure_server() -> Result<(Arc<rustls::ServerConfig>, CertificateDer<'static>)> {
     let (certs, key) = generate_self_signed_cert()?;
+    let cert = certs.first().unwrap().clone();
 
     let mut server_config = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
 
-    server_config.alpn_protocols = vec![b"hq-29".to_vec()];
+    server_config.alpn_protocols = vec![b"hytale/1".to_vec()];
 
-    Ok(Arc::new(server_config))
-}
-
-/// Creates client TLS config that accepts any certificate
-pub fn configure_client() -> Arc<rustls::ClientConfig> {
-    let mut client_config = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
-        .with_no_client_auth();
-
-    client_config.alpn_protocols = vec![b"hq-29".to_vec()];
-
-    Arc::new(client_config)
-}
-
-/// Accepts all certificates without verification
-#[derive(Debug)]
-struct SkipServerVerification;
-
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ED25519,
-        ]
-    }
+    Ok((Arc::new(server_config), cert))
 }
