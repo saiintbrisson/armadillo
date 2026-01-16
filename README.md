@@ -17,6 +17,8 @@ flowchart LR
     Proxy -.->|auth requests| Sessions
 ```
 
+<video src="https://github.com/user-attachments/assets/5bb292a4-e21b-4e46-9295-5a20fc911d77" controls preload></video>
+
 ## Quick Start
 
 Build and install the server plugin:
@@ -27,21 +29,18 @@ cd plugin
 cp build/libs/offline-mode-0.1.0.jar /path/to/server/mods/
 ```
 
-Build the proxy:
+Run the proxy:
 
 ```bash
 cargo build --release
-```
 
-Run the proxy (requires `auth.enc` from a Hytale client):
-
-```bash
+cp /path/to/server/auth.enc . # we need a recent auth.enc to impersonate the server
 ./target/release/armadillo --listen 0.0.0.0:5520 --upstream 127.0.0.1:5521
 ```
 
-Point your client to the proxy address. The server should listen on the upstream port with the plugin loaded.
+Point your client to the proxy bind address. The server must listen on the upstream port with the plugin loaded. If you encounter issues like a 400 on proxy startup, refresh your `auth.enc` file by logging out (`/auth logout`) and logging in (`/auth login device`) again.
 
-## Why?
+## Why and how?
 
 First, because it's fun. Second, it's a good starting point for those looking into how to extend the server.
 
@@ -55,7 +54,7 @@ points, the server allows unauthenticated players to join:
 * A patch to `SessionServiceClient` allows us to avoid requests to Hytale's servers
 * Inserting a fake game session to `ServerAuthManager` avoid a set of other requests
 
-<video src="https://github.com/user-attachments/assets/5bb292a4-e21b-4e46-9295-5a20fc911d77" controls preload></video>
+You can find more in [AuthBypass.java](./plugin/src/main/java/rs/luiz/hytale/offline_mode/AuthBypass.java).
 
 ### Player -> Proxy
 
@@ -94,16 +93,6 @@ sequenceDiagram
     U->>P: ServerAuthToken packet
     Note over P,U: Bidirectional relay begins
 ```
-
-## Packet Structure
-
-All packets use a simple framing format:
-
-| Field | Size | Description |
-|-------|------|-------------|
-| length | 4 bytes (LE) | Payload length |
-| id | 4 bytes (LE) | Packet type ID |
-| payload | variable | Packet-specific data |
 
 ## The auth.enc file
 
