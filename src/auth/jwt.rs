@@ -4,11 +4,10 @@ use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Deserialize;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{debug, warn};
+use tracing::debug;
 
-use super::oauth::{JwkKey, SessionServiceClient};
+use super::ServerIdentity;
+use super::session::{JwksResponse, SESSION_SERVICE_URL};
 
 const CLOCK_SKEW_SECONDS: i64 = 300;
 
@@ -28,6 +27,7 @@ struct CertificateBinding {
 struct RawClaims {
     iss: Option<String>,
     aud: Option<Audience>,
+    sub: Option<String>,
     iat: Option<i64>,
     exp: Option<i64>,
     nbf: Option<i64>,
@@ -52,20 +52,15 @@ impl Audience {
 }
 
 #[derive(Debug, Clone)]
-pub struct IdentityTokenClaims {
+pub struct IdentityClaims {
     pub issuer: Option<String>,
-    pub profile: Option<Profile>,
+    pub subject: String,
+    pub profile: Profile,
     pub expires_at: Option<i64>,
 }
 
-impl IdentityTokenClaims {
-    pub fn username(&self) -> Option<&str> {
-        self.profile.as_ref().and_then(|p| p.username.as_deref())
-    }
-}
-
 #[derive(Debug, Clone)]
-pub struct AccessTokenClaims {
+pub struct AccessClaims {
     pub issuer: Option<String>,
     pub audience: Option<String>,
     pub profile: Option<Profile>,
@@ -73,39 +68,38 @@ pub struct AccessTokenClaims {
     pub certificate_fingerprint: Option<String>,
 }
 
-impl AccessTokenClaims {
+impl AccessClaims {
     pub fn username(&self) -> Option<&str> {
         self.profile.as_ref().and_then(|p| p.username.as_deref())
     }
 }
 
+/// Validates JWTs issued by Hytale's session service.
+///
+/// Verifies EdDSA signatures using keys from the JWKS, checks issuer/audience claims,
+/// and validates expiration. Used to authenticate both identity tokens (sent by players
+/// on connect) and access tokens (returned after the auth grant exchange).
+///
+/// ```no_run
+/// let jwks = session_client.fetch_jwks().await?;
+/// let validator = JwtValidator::new(&server_identity, jwks);
+/// let claims = validator.validate_identity_token(&token)?;
+/// ```
 pub struct JwtValidator {
-    session_client: SessionServiceClient,
+    jwks: JwksResponse,
     expected_issuer: String,
     expected_audience: String,
-    jwks_cache: RwLock<Option<Arc<Vec<JwkKey>>>>,
 }
 
 impl JwtValidator {
-    pub fn new(session_service_url: &str, expected_audience: &str) -> Self {
+    /// Creates a validator with the given server identity and JWKS.
+    /// The identity determines the expected audience claim in access tokens.
+    pub fn new(server_identity: &ServerIdentity, jwks: JwksResponse) -> Self {
         Self {
-            session_client: SessionServiceClient::new(session_service_url)
-                .expect("Failed to create session client"),
-            expected_issuer: session_service_url.to_string(),
-            expected_audience: expected_audience.to_string(),
-            jwks_cache: RwLock::new(None),
+            jwks,
+            expected_issuer: SESSION_SERVICE_URL.to_string(),
+            expected_audience: server_identity.audience.clone(),
         }
-    }
-
-    async fn get_jwks(&self) -> Result<Arc<Vec<JwkKey>>> {
-        if let Some(keys) = self.jwks_cache.read().await.clone() {
-            return Ok(keys);
-        }
-
-        let jwks = self.session_client.get_jwks().await?;
-        let keys = Arc::new(jwks.keys);
-        *self.jwks_cache.write().await = Some(keys.clone());
-        Ok(keys)
     }
 
     fn decode_jwt<T: for<'de> Deserialize<'de>>(token: &str) -> Result<T> {
@@ -117,7 +111,7 @@ impl JwtValidator {
         Ok(serde_json::from_slice(&payload)?)
     }
 
-    async fn verify_signature(&self, token: &str) -> Result<bool> {
+    fn verify_signature(&self, token: &str) -> Result<bool> {
         #[derive(Deserialize)]
         struct Header {
             alg: String,
@@ -139,8 +133,9 @@ impl JwtValidator {
             ));
         }
 
-        let keys = self.get_jwks().await?;
-        let key = keys
+        let key = self
+            .jwks
+            .keys
             .iter()
             .find(|k| {
                 k.kty == "OKP"
@@ -170,12 +165,14 @@ impl JwtValidator {
         }
     }
 
-    pub async fn validate_identity_token(&self, token: &str) -> Result<IdentityTokenClaims> {
+    /// Validates a player's identity token received in the Connect packet.
+    /// Returns the player's profile (username, UUID) if valid.
+    pub fn validate_identity_token(&self, token: &str) -> Result<IdentityClaims> {
         if token.is_empty() {
             return Err(anyhow!("Identity token is empty"));
         }
 
-        if !self.verify_signature(token).await? {
+        if !self.verify_signature(token)? {
             return Err(anyhow!("Identity token signature verification failed"));
         }
 
@@ -209,23 +206,31 @@ impl JwtValidator {
             return Err(anyhow!("Identity token issued in the future"));
         }
 
-        Ok(IdentityTokenClaims {
+        Ok(IdentityClaims {
             issuer: raw.iss,
-            profile: raw.profile,
+            profile: raw
+                .profile
+                .ok_or_else(|| anyhow!("Identity token missing profile"))?,
+            subject: raw
+                .sub
+                .ok_or_else(|| anyhow!("Identity token missing subject"))?,
             expires_at: raw.exp,
         })
     }
 
-    pub async fn validate_access_token(
+    /// Validates the access token returned by the player after the auth grant exchange.
+    /// If the token contains a certificate binding, pass the client's cert fingerprint
+    /// to verify it matches.
+    pub fn validate_access_token(
         &self,
         token: &str,
         client_cert_fingerprint: Option<&str>,
-    ) -> Result<AccessTokenClaims> {
+    ) -> Result<AccessClaims> {
         if token.is_empty() {
             return Err(anyhow!("Access token is empty"));
         }
 
-        if !self.verify_signature(token).await? {
+        if !self.verify_signature(token)? {
             return Err(anyhow!("Access token signature verification failed"));
         }
 
@@ -277,14 +282,14 @@ impl JwtValidator {
                     ));
                 }
                 None => {
-                    warn!(
+                    return Err(anyhow!(
                         "Token requires certificate binding but client did not present a certificate"
-                    );
+                    ));
                 }
             }
         }
 
-        Ok(AccessTokenClaims {
+        Ok(AccessClaims {
             issuer: raw.iss,
             audience,
             profile: raw.profile,

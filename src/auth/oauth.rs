@@ -1,13 +1,20 @@
-#![allow(dead_code)]
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::Deserialize;
+use tracing::{error, info, warn};
 
-const OAUTH_TOKEN_URL: &str = "https://oauth.accounts.hytale.com/oauth2/token";
+use super::CredentialStore;
+use crate::crypto::auth_file::AuthCredentials;
+
+pub const OAUTH_TOKEN_URL: &str = "https://oauth.accounts.hytale.com/oauth2/token";
+const REFRESH_MARGIN: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Deserialize)]
-pub struct OAuthTokenResponse {
+pub struct TokenResponse {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: i64,
@@ -17,45 +24,36 @@ pub struct OAuthTokenResponse {
     pub token_type: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct GameSessionResponse {
-    #[serde(rename = "sessionToken")]
-    pub session_token: Option<String>,
-    #[serde(rename = "identityToken")]
-    pub identity_token: Option<String>,
-    #[serde(rename = "expiresAt")]
-    pub expires_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AuthGrantResponse {
-    #[serde(rename = "authorizationGrant")]
-    pub authorization_grant: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AccessTokenResponse {
-    #[serde(rename = "accessToken")]
-    pub access_token: String,
-}
-
-pub struct SessionServiceClient {
+/// HTTP client for Hytale's OAuth service at `https://oauth.accounts.hytale.com`.
+///
+/// Used to refresh OAuth tokens before they expire. Servers need valid OAuth tokens
+/// to create game sessions via `SessionClient`. For automatic refresh, use
+/// `token_refresh_task` instead of calling this directly.
+pub struct OAuthClient {
     client: Client,
-    base_url: String,
+    token_endpoint: String,
 }
 
-impl SessionServiceClient {
-    pub fn new(base_url: &str) -> Result<Self> {
+impl OAuthClient {
+    /// Creates a client pointing to the production OAuth service.
+    pub fn new() -> Result<Self> {
+        Self::with_endpoint(OAUTH_TOKEN_URL)
+    }
+
+    /// Creates a client with a custom token endpoint.
+    pub fn with_endpoint(token_endpoint: &str) -> Result<Self> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()?;
 
-        let base_url = base_url.strip_suffix('/').unwrap_or(base_url).to_string();
-
-        Ok(Self { client, base_url })
+        Ok(Self {
+            client,
+            token_endpoint: token_endpoint.to_string(),
+        })
     }
 
-    pub async fn refresh_oauth_token(&self, refresh_token: &str) -> Result<OAuthTokenResponse> {
+    /// Exchanges a refresh token for new access and refresh tokens.
+    pub async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse> {
         let body = format!(
             "grant_type=refresh_token&client_id={}&refresh_token={}",
             urlencoding::encode("hytale-server"),
@@ -64,7 +62,7 @@ impl SessionServiceClient {
 
         let response = self
             .client
-            .post(OAUTH_TOKEN_URL)
+            .post(&self.token_endpoint)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("User-Agent", "HytaleServer/1.0")
             .body(body)
@@ -79,139 +77,92 @@ impl SessionServiceClient {
 
         Ok(response.json().await?)
     }
+}
 
-    pub async fn create_game_session(
-        &self,
-        oauth_access_token: &str,
-        profile_uuid: &str,
-    ) -> Result<GameSessionResponse> {
-        let body = serde_json::json!({
-            "uuid": profile_uuid
-        });
+/// Long-running task that automatically refreshes OAuth tokens before expiry.
+///
+/// Spawns this as a background task at server startup. It monitors the credential
+/// store and refreshes tokens 5 minutes before they expire, persisting the new
+/// credentials to disk.
+///
+/// ```no_run
+/// let store = Arc::new(CredentialStore::new(...));
+/// tokio::spawn(token_refresh_task(store.clone()));
+/// ```
+pub async fn token_refresh_task(store: Arc<CredentialStore>) {
+    let client = match OAuthClient::new() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to create OAuth client for token refresh: {e}");
+            return;
+        }
+    };
 
-        let response = self
-            .client
-            .post(format!("{}/game-session/new", self.base_url))
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {oauth_access_token}"))
-            .header("User-Agent", "HytaleServer/1.0")
-            .json(&body)
-            .send()
-            .await?;
+    loop {
+        let oauth = store.oauth_credentials().await;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "Failed to create game session: HTTP {status} - {body}"
-            ));
+        let expires_at = match DateTime::parse_from_rfc3339(&oauth.expires_at) {
+            Ok(dt) => dt.with_timezone(&Utc),
+            Err(e) => {
+                warn!("Failed to parse expires_at, refreshing now: {e}");
+                Utc::now()
+            }
+        };
+
+        let now = Utc::now();
+        let refresh_at = expires_at - chrono::Duration::from_std(REFRESH_MARGIN).unwrap();
+        let sleep_duration = if refresh_at > now {
+            (refresh_at - now).to_std().unwrap_or(Duration::ZERO)
+        } else {
+            Duration::ZERO
+        };
+
+        if !sleep_duration.is_zero() {
+            info!(
+                "Token expires at {}, scheduling refresh in {}",
+                expires_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                humanize_duration(sleep_duration)
+            );
+            tokio::time::sleep(sleep_duration).await;
         }
 
-        Ok(response.json().await?)
-    }
+        info!("Refreshing OAuth token...");
+        match client.refresh(&oauth.refresh_token).await {
+            Ok(response) => {
+                let new_expires = Utc::now() + chrono::Duration::seconds(response.expires_in);
+                let updated = AuthCredentials {
+                    access_token: response.access_token,
+                    refresh_token: response.refresh_token,
+                    expires_at: new_expires.to_rfc3339(),
+                    profile_uuid: oauth.profile_uuid.clone(),
+                };
 
-    pub async fn request_authorization_grant(
-        &self,
-        identity_token: &str,
-        server_audience: &str,
-        bearer_token: &str,
-    ) -> Result<String> {
-        let body = serde_json::json!({
-            "identityToken": identity_token,
-            "aud": server_audience
-        });
+                store.update_oauth_credentials(updated).await;
 
-        let response = self
-            .client
-            .post(format!("{}/server-join/auth-grant", self.base_url))
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .header("Authorization", format!("Bearer {bearer_token}"))
-            .header("User-Agent", "HytaleServer/1.0")
-            .json(&body)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "Failed to request authorization grant: HTTP {status} - {body}"
-            ));
+                if let Err(e) = store.persist_async().await {
+                    error!("Failed to persist refreshed credentials: {e}");
+                } else {
+                    info!(
+                        "OAuth token refreshed and saved, new expiry: {}",
+                        new_expires.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
+                }
+            }
+            Err(e) => {
+                error!("Failed to refresh OAuth token: {e}");
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
         }
-
-        let resp: AuthGrantResponse = response.json().await?;
-        Ok(resp.authorization_grant)
-    }
-
-    pub async fn exchange_auth_grant(
-        &self,
-        authorization_grant: &str,
-        x509_fingerprint: &str,
-        bearer_token: &str,
-    ) -> Result<String> {
-        let body = serde_json::json!({
-            "authorizationGrant": authorization_grant,
-            "x509Fingerprint": x509_fingerprint
-        });
-
-        let response = self
-            .client
-            .post(format!("{}/server-join/auth-token", self.base_url))
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .header("Authorization", format!("Bearer {bearer_token}"))
-            .header("User-Agent", "HytaleServer/1.0")
-            .json(&body)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "Failed to exchange auth grant: HTTP {status} - {body}"
-            ));
-        }
-
-        let resp: AccessTokenResponse = response.json().await?;
-        Ok(resp.access_token)
-    }
-
-    pub async fn get_jwks(&self) -> Result<JwksResponse> {
-        let response = self
-            .client
-            .get(format!("{}/.well-known/jwks.json", self.base_url))
-            .header("Accept", "application/json")
-            .header("User-Agent", "HytaleServer/1.0")
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("Failed to fetch JWKS: HTTP {status} - {body}"));
-        }
-
-        Ok(response.json().await?)
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct JwksResponse {
-    pub keys: Vec<JwkKey>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct JwkKey {
-    pub kty: String,
-    #[serde(default)]
-    pub alg: Option<String>,
-    #[serde(rename = "use", default)]
-    pub key_use: Option<String>,
-    pub kid: Option<String>,
-    pub crv: Option<String>,
-    pub x: Option<String>,
-    #[serde(default)]
-    pub y: Option<String>,
+fn humanize_duration(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 3600 {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    } else if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
 }

@@ -35,7 +35,7 @@ Run the proxy:
 cargo build --release
 
 cp /path/to/server/auth.enc . # we need a recent auth.enc to impersonate the server
-./target/release/armadillo --listen 0.0.0.0:5520 --upstream 127.0.0.1:5521
+./target/release/armadillo-proxy --listen 0.0.0.0:5520 --upstream 127.0.0.1:5521
 ```
 
 Point your client to the proxy bind address. The server must listen on the upstream port with the plugin loaded. If you encounter issues like a 400 on proxy startup, refresh your `auth.enc` file by logging out (`/auth logout`) and logging in (`/auth login device`) again.
