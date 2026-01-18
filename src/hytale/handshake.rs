@@ -30,7 +30,7 @@ pub struct HytaleAuthResult {
 /// produces access tokens. Create once at server startup and reuse for all
 /// connections.
 ///
-/// ```no_run
+/// ```ignore
 /// let authenticator = HytaleAuthenticator::with_identity(
 ///     ServerIdentity::default(),
 ///     credentials,

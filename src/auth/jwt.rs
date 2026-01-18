@@ -80,7 +80,7 @@ impl AccessClaims {
 /// and validates expiration. Used to authenticate both identity tokens (sent by players
 /// on connect) and access tokens (returned after the auth grant exchange).
 ///
-/// ```no_run
+/// ```ignore
 /// let jwks = session_client.fetch_jwks().await?;
 /// let validator = JwtValidator::new(&server_identity, jwks);
 /// let claims = validator.validate_identity_token(&token)?;

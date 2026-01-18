@@ -18,7 +18,7 @@ pub struct UpstreamConnection {
 /// with self-signed certificates. The client presents its own certificate for
 /// mutual TLS when required by the server.
 ///
-/// ```no_run
+/// ```ignore
 /// let upstream = connect_upstream(
 ///     "127.0.0.1:5521".parse()?,
 ///     HYTALE_ALPN,

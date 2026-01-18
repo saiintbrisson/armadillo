@@ -111,7 +111,6 @@ mod tests {
     #[test]
     fn test_decode() {
         let data = decode_share_code(EXAMPLE_CODE).unwrap();
-        dbg!(&data);
         assert_eq!(data.server_name, "New World");
         assert_eq!(data.password, "123");
         assert_eq!(data.candidates.len(), 1);

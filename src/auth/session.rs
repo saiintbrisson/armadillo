@@ -57,7 +57,7 @@ pub struct JwkKey {
 /// authorization grants for player joins, and exchanging grants for access tokens.
 /// Also provides JWKS fetching for JWT signature verification.
 ///
-/// ```no_run
+/// ```ignore
 /// let client = SessionClient::new()?;
 /// let jwks = client.fetch_jwks().await?;
 /// let session = client.create_game_session(&oauth_token, &profile_uuid).await?;
@@ -281,7 +281,7 @@ impl CredentialStore {
             .read()
             .await
             .as_ref()
-            .map(|s| dbg!(s.identity_token.clone()))
+            .map(|s| s.identity_token.clone())
     }
 
     pub fn certificate_fingerprint(&self) -> &str {

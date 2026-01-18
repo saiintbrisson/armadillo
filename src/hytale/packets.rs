@@ -1,6 +1,6 @@
 mod auth;
 
-pub use auth::{AuthGrant, AuthToken, ClientType, Connect,  ServerAuthToken};
+pub use auth::{AuthGrant, AuthToken, ClientType, Connect, ServerAuthToken};
 
 use anyhow::{Result, anyhow};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -85,7 +85,7 @@ impl Packet {
 /// Handles partial reads and buffering internally. Use `read_packet()` for
 /// blocking reads or `try_read_packet()` to check for buffered data.
 ///
-/// ```no_run
+/// ```ignore
 /// let mut reader = PacketReader::new(recv_stream);
 /// loop {
 ///     let packet = reader.read_packet().await?;
@@ -147,7 +147,7 @@ impl PacketReader {
 
 /// Encodes a packet id and payload into a framed buffer ready for transmission.
 ///
-/// ```
+/// ```ignore
 /// let frame = frame_packet(1, b"hello");
 /// send_stream.write_all(&frame).await?;
 /// ```

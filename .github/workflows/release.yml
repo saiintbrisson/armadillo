@@ -22,6 +22,8 @@ jobs:
             os: windows-latest
 
     runs-on: ${{ matrix.os }}
+    env:
+      BINARIES: armadillo-proxy armadillo-relay
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -44,24 +46,36 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       - name: Rename binaries (Unix)
-        if: matrix.os != 'windows-latest'
+        if: runner.os != 'Windows'
         run: |
-          mv target/${{ matrix.target }}/release/armadillo target/${{ matrix.target }}/release/armadillo-${{ matrix.target }}
-          mv target/${{ matrix.target }}/release/armadillo-relay target/${{ matrix.target }}/release/armadillo-relay-${{ matrix.target }}
+          for bin in $BINARIES; do
+            mv target/${{ matrix.target }}/release/$bin target/${{ matrix.target }}/release/$bin-${{ matrix.target }}
+          done
 
       - name: Rename binaries (Windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Move-Item target/${{ matrix.target }}/release/armadillo.exe target/${{ matrix.target }}/release/armadillo-${{ matrix.target }}.exe
-          Move-Item target/${{ matrix.target }}/release/armadillo-relay.exe target/${{ matrix.target }}/release/armadillo-relay-${{ matrix.target }}.exe
+          $binaries = $env:BINARIES -split ' '
+          foreach ($bin in $binaries) {
+            Move-Item "target/${{ matrix.target }}/release/$bin.exe" "target/${{ matrix.target }}/release/$bin-${{ matrix.target }}.exe"
+          }
 
-      - name: Upload to release
+      - name: Upload to release (Unix)
+        if: runner.os != 'Windows'
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            target/${{ matrix.target }}/release/armadillo-${{ matrix.target }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
-            target/${{ matrix.target }}/release/armadillo-relay-${{ matrix.target }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+            target/${{ matrix.target }}/release/armadillo-proxy-${{ matrix.target }}
+            target/${{ matrix.target }}/release/armadillo-relay-${{ matrix.target }}
+
+      - name: Upload to release (Windows)
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/${{ matrix.target }}/release/armadillo-proxy-${{ matrix.target }}.exe
+            target/${{ matrix.target }}/release/armadillo-relay-${{ matrix.target }}.exe
 
   plugin:
     runs-on: ubuntu-latest

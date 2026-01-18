@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
     let upstream_addr = resolve_address(&cli.upstream).await?;
 
     let (endpoint, server_cert) =
-        armadillo::make_server_endpoint(listen_addr, HYTALE_ALPN, CertSource::SelfSigned)?;
+        armadillo::make_server_endpoint(listen_addr, CertSource::SelfSigned)?;
 
     let store = load_server_credentials(cli.auth, cli.machine_id, &server_cert)?;
     let oauth = store.oauth_credentials().await;

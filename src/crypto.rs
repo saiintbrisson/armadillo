@@ -1,7 +1,11 @@
 use anyhow::Result;
 use rcgen::{CertificateParams, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
+use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
 use std::sync::Arc;
+
+use crate::HYTALE_ALPN;
 
 /// Source of TLS certificates for server or client connections.
 pub enum CertSource {
@@ -30,7 +34,7 @@ pub fn generate_self_signed_cert() -> Result<(Vec<CertificateDer<'static>>, Priv
 
 /// Creates a server TLS config with self-signed cert and default ALPN.
 pub fn configure_server() -> Result<(Arc<rustls::ServerConfig>, CertificateDer<'static>)> {
-    make_server_tls_config(&[], CertSource::SelfSigned)
+    make_server_tls_config(None, CertSource::SelfSigned)
 }
 
 /// Creates a rustls server configuration with the specified certificate.
@@ -38,7 +42,7 @@ pub fn configure_server() -> Result<(Arc<rustls::ServerConfig>, CertificateDer<'
 /// Returns both the config and the certificate (for fingerprint computation).
 /// If no ALPN is specified, defaults to "hytale/1".
 pub fn make_server_tls_config(
-    alpn: &[u8],
+    alpn: Option<&[u8]>,
     cert_source: CertSource,
 ) -> Result<(Arc<rustls::ServerConfig>, CertificateDer<'static>)> {
     let (certs, key): (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) = match cert_source {
@@ -48,16 +52,75 @@ pub fn make_server_tls_config(
     let cert = certs.first().unwrap().clone();
 
     let mut server_config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
+        .with_client_cert_verifier(Arc::new(AcceptAnyClientCert))
         .with_single_cert(certs, key)?;
 
-    if !alpn.is_empty() {
+    if let Some(alpn) = alpn {
         server_config.alpn_protocols = vec![alpn.to_vec()];
     } else {
-        server_config.alpn_protocols = vec![b"hytale/1".to_vec()];
+        server_config.alpn_protocols = vec![HYTALE_ALPN.to_vec()];
     }
 
     Ok((Arc::new(server_config), cert))
+}
+
+/// Client certificate verifier that requires a certificate but accepts any.
+/// Equivalent to Hytale's `ClientAuth.REQUIRE` + `InsecureTrustManagerFactory`.
+/// Certificates are collected for fingerprint validation against JWT token bindings,
+/// not validated against a CA.
+#[derive(Debug)]
+struct AcceptAnyClientCert;
+
+impl ClientCertVerifier for AcceptAnyClientCert {
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        Ok(ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA512,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::ECDSA_NISTP521_SHA512,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PSS_SHA384,
+            SignatureScheme::RSA_PSS_SHA512,
+            SignatureScheme::ED25519,
+        ]
+    }
+
+    fn client_auth_mandatory(&self) -> bool {
+        true
+    }
 }
 
 pub mod auth_file {

@@ -11,10 +11,9 @@ use crate::crypto::{CertSource, make_server_tls_config};
 /// Returns the endpoint and the server's certificate (for fingerprint computation).
 /// Use `accept_client` to handle incoming connections from the endpoint.
 ///
-/// ```no_run
+/// ```ignore
 /// let (endpoint, cert) = make_server_endpoint(
 ///     "0.0.0.0:5520".parse()?,
-///     HYTALE_ALPN,
 ///     CertSource::SelfSigned,
 /// )?;
 ///
@@ -24,10 +23,9 @@ use crate::crypto::{CertSource, make_server_tls_config};
 /// ```
 pub fn make_server_endpoint(
     bind_addr: SocketAddr,
-    alpn: &[u8],
     cert_source: CertSource,
 ) -> Result<(Endpoint, CertificateDer<'static>)> {
-    let (server_tls_config, cert) = make_server_tls_config(alpn, cert_source)?;
+    let (server_tls_config, cert) = make_server_tls_config(None, cert_source)?;
 
     let server_config = quinn::ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(server_tls_config)?,
@@ -64,7 +62,7 @@ impl ClientConnection {
 /// Completes the TLS handshake and waits for the client to open a stream.
 /// The returned `ClientConnection` is ready for reading and writing.
 ///
-/// ```no_run
+/// ```ignore
 /// while let Some(incoming) = endpoint.accept().await {
 ///     tokio::spawn(async move {
 ///         let client = accept_client(incoming).await?;

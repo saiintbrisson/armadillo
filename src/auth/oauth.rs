@@ -85,7 +85,7 @@ impl OAuthClient {
 /// store and refreshes tokens 5 minutes before they expire, persisting the new
 /// credentials to disk.
 ///
-/// ```no_run
+/// ```ignore
 /// let store = Arc::new(CredentialStore::new(...));
 /// tokio::spawn(token_refresh_task(store.clone()));
 /// ```

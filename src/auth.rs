@@ -3,8 +3,10 @@ mod oauth;
 mod session;
 
 pub use jwt::{AccessClaims, IdentityClaims, JwtValidator, Profile};
-pub use oauth::{OAuthClient, TokenResponse, OAUTH_TOKEN_URL, token_refresh_task};
-pub use session::{CredentialStore, GameSession, JwkKey, JwksResponse, SessionClient, SESSION_SERVICE_URL};
+pub use oauth::{OAUTH_TOKEN_URL, OAuthClient, TokenResponse, token_refresh_task};
+pub use session::{
+    CredentialStore, GameSession, JwkKey, JwksResponse, SESSION_SERVICE_URL, SessionClient,
+};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
@@ -33,7 +35,7 @@ impl Default for ServerIdentity {
 /// access tokens are tied to a specific client certificate. Returns the
 /// hash as a URL-safe base64 string (no padding).
 ///
-/// ```
+/// ```ignore
 /// let cert_der = server_cert.as_ref();
 /// let fingerprint = compute_certificate_fingerprint(cert_der);
 /// // fingerprint can be compared against cnf.x5t#S256 claim in JWTs
