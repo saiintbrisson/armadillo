@@ -27,17 +27,17 @@ pub struct Connect {
     pub protocol_build_number: i32,
     pub client_version: String,
     pub client_type: ClientType,
-    pub language: Option<String>,
-    pub identity_token: Option<String>,
     pub uuid: uuid::Uuid,
     pub username: String,
-    pub referral_source: Option<String>,
-    pub referral_data: Option<Vec<u8>>,
+    pub identity_token: Option<String>,
+    pub language: String,
+    pub referral_data: Option<String>,
+    pub referral_source: Option<Vec<u8>>,
 }
 
 impl Connect {
     pub const PACKET_ID: u32 = 0;
-    const VARIABLE_BLOCK_START: usize = 102;
+    const VARIABLE_BLOCK_START: usize = 66;
 
     pub fn decode(payload: &mut Bytes) -> Result<Self> {
         if payload.len() < Self::VARIABLE_BLOCK_START {
@@ -52,38 +52,47 @@ impl Connect {
         let client_type = ClientType::from(buf.get_u8());
         let uuid = uuid::Uuid::from_u128(buf.get_u128());
 
-        // Skip offset tables so we can read it instant
-        // why is the table there? i dont know
-        buf.get_i32_le(); // Username offset
-        buf.get_i32_le(); // Identity token offset
-        buf.get_i32_le(); // language offset
+        // Offset table 
+        let username_offset = buf.get_i32_le(); // Username offset
+        let identity_token_offset = buf.get_i32_le(); // Identity token offset
+        let language_offset = buf.get_i32_le(); // language offset
         let referral_data_offset = buf.get_i32_le(); // referral data offset
         let referral_source_offset = buf.get_i32_le(); // referral source offset
 
-        let username = read_var_string(&mut buf).unwrap();
-        let identity_token = Some(read_var_string(&mut buf).unwrap());
-        let language = Some(read_var_string(&mut buf).unwrap());
 
-        let referral_source = if null_bits & 4 != 0 && referral_source_offset >= 0 {
-            Some(read_var_string(&mut buf)?)
+        let username = read_var_string(&mut buf.slice(username_offset as usize..)).unwrap();
+
+        let identity_token = if null_bits & 1 != 0 && identity_token_offset >= 0 {
+            let mut token_block = buf.slice(identity_token_offset as usize..);
+            Some(read_var_string(&mut token_block).unwrap())
         } else {
             None
         };
 
-        let referral_data = if null_bits & 8 != 0 && referral_data_offset >= 0 {
-            let len = read_var_int(&mut buf)?;
+        let language = read_var_string(&mut buf.slice(language_offset as usize..)).unwrap();
+
+        let referral_data = if null_bits & 2 != 0 && referral_data_offset >= 0 {
+            let mut ref_data_block = buf.slice(referral_data_offset as usize..);
+            Some(read_var_string(&mut ref_data_block)?)
+        } else {
+            None
+        };
+
+        let referral_source = if null_bits & 4 != 0 && referral_source_offset >= 0 {
+            let mut ref_source_block = buf.slice(referral_source_offset as usize..);
+            let len = read_var_int(&mut ref_source_block)?;
             if len < 0 {
                 return Err(anyhow!("Negative referral data length"));
             }
             let len = len as usize;
-            if buf.remaining() < len {
+            if ref_source_block.remaining() < len {
                 return Err(anyhow!("Referral data extends past buffer"));
             }
             Some(buf.copy_to_bytes(len).to_vec())
         } else {
             None
         };
-        //
+
         Ok(Self {
             protocol_crc,
             protocol_build_number,
@@ -93,8 +102,8 @@ impl Connect {
             identity_token,
             uuid,
             username,
-            referral_source,
             referral_data,
+            referral_source,
         })
     }
 }
