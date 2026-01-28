@@ -52,13 +52,12 @@ impl Connect {
         let client_type = ClientType::from(buf.get_u8());
         let uuid = uuid::Uuid::from_u128(buf.get_u128());
 
-        // Offset table 
+        // Offset table
         let username_offset = buf.get_i32_le(); // Username offset
         let identity_token_offset = buf.get_i32_le(); // Identity token offset
         let language_offset = buf.get_i32_le(); // language offset
         let referral_data_offset = buf.get_i32_le(); // referral data offset
         let referral_source_offset = buf.get_i32_le(); // referral source offset
-
 
         let username = read_var_string(&mut buf.slice(username_offset as usize..)).unwrap();
 
